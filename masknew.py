@@ -1,8 +1,7 @@
 import geopandas as gpd
+import numpy as np
 import rasterio
 from rasterio import features
-from shapely.geometry import box
-import numpy as np
 
 
 def extract_basin_boundary(pfbas_code, shp_path, code_field="PFBAS_ID"):
@@ -31,13 +30,12 @@ def extract_basin_boundary(pfbas_code, shp_path, code_field="PFBAS_ID"):
     if basin.empty:
         raise ValueError(f"未找到编码为 {pfbas_code} 的流域，请检查字段名 '{code_field}' 或编码值。")
 
-    # 若存在多个相同编码的要素，取其并集（通常流域编码唯一）
     if len(basin) > 1:
         geom = basin.geometry.unary_union
     else:
         geom = basin.geometry.iloc[0]
 
-    bounds = geom.bounds  # (minx, miny, maxx, maxy)
+    bounds = geom.bounds
     return {
         "geometry": geom,
         "bounds": bounds,
@@ -55,7 +53,7 @@ def mask_and_crop_tif(tif_path, basin_info, output_tif_path, expand=1):
     tif_path : str
         输入 TIF 文件路径。
     basin_info : dict
-        extract_basin_boundary 函数返回的字典，包含 'geometry', 'crs' 等。
+        extract_basin_boundary 函数返回的字典。
     output_tif_path : str
         输出掩膜 TIF 文件路径。
     expand : int, optional
@@ -69,41 +67,35 @@ def mask_and_crop_tif(tif_path, basin_info, output_tif_path, expand=1):
         gdf_geom = gpd.GeoDataFrame(geometry=[geom_orig], crs=orig_crs)
         geom_proj = gdf_geom.to_crs(src.crs).geometry.iloc[0]
 
-        # 在 TIF 投影下计算流域的最小外接矩形边界
         xmin, ymin, xmax, ymax = geom_proj.bounds
-
-        # 获取 TIF 的像素分辨率（地理单位/像素）
         transform = src.transform
-        pixel_width = abs(transform.a)      # x 方向分辨率（正数）
-        pixel_height = abs(transform.e)     # y 方向分辨率（正数）
+        pixel_width = abs(transform.a)
+        pixel_height = abs(transform.e)
 
-        # 向外扩展指定的像素数（地理坐标）
         new_xmin = xmin - expand * pixel_width
         new_xmax = xmax + expand * pixel_width
         new_ymin = ymin - expand * pixel_height
         new_ymax = ymax + expand * pixel_height
 
-        # 计算输出栅格的尺寸（保证整数像素）
         width = int(round((new_xmax - new_xmin) / pixel_width))
         height = int(round((new_ymax - new_ymin) / pixel_height))
 
-        # 构造输出仿射变换（左上角坐标）
         out_transform = rasterio.Affine(
             pixel_width, 0.0, new_xmin,
             0.0, -pixel_height, new_ymax
         )
 
-        # 生成掩膜数组：多边形内部为 True (1)，外部为 False (0)
-        mask = features.geometry_mask(
+        # 生成掩膜：多边形内部 = True，外部 = False
+        mask_in = features.geometry_mask(
             [geom_proj],
             out_shape=(height, width),
             transform=out_transform,
-            invert=False,          # False: 多边形内 = True
-            all_touched=False,     # 仅当像素中心在多边形内时算内部
+            invert=False,      # 内部为 True
+            all_touched=False,
         )
-        mask_uint8 = mask.astype(np.uint8)   # 转换为 uint8 (0/1)
+        # 反转：内部变为 1，外部变为 0
+        mask_uint8 = np.where(mask_in, 0, 1).astype(np.uint8)
 
-        # 准备输出元数据
         profile = src.profile
         profile.update({
             "driver": "GTiff",
@@ -112,26 +104,27 @@ def mask_and_crop_tif(tif_path, basin_info, output_tif_path, expand=1):
             "transform": out_transform,
             "dtype": rasterio.uint8,
             "count": 1,
-            "compress": "lzw",          # 可选，压缩减小体积
-            "nodata": None,             # 关键修改：避免原 nodata=65535 超出 uint8 范围
+            "compress": "lzw",
+            "nodata": None,      # 避免原 nodata=65535 与 uint8 冲突
         })
 
-        # 写入输出文件
         with rasterio.open(output_tif_path, "w", **profile) as dst:
             dst.write(mask_uint8, 1)
 
     print(f"掩膜栅格已生成：{output_tif_path}")
 
+
 # 示例用法
 if __name__ == "__main__":
-    # 用户需根据实际情况修改以下路径和编码
+    # 用户需修改以下参数
     shp_file = "PFBAS8.shp"
     tif_file = "PFBAS8.tif"
     pfbas = "01010105000000"
+    output_mask = "masknew01.tif"
+    expand_pixels = 1
+    code_field = "PFBAS_ID"   # 根据实际字段名修改
 
-    # 函数一：获取流域信息
-    basin_info = extract_basin_boundary(pfbas, shp_file, code_field="PFBAS_ID")
+    basin_info = extract_basin_boundary(pfbas, shp_file, code_field=code_field)
     print("原始边界 (xmin, ymin, xmax, ymax):", basin_info["bounds"])
 
-    # 函数二：生成掩膜 TIF（向外扩展 1 像素）
-    mask_and_crop_tif(tif_file, basin_info, "mask0508.tif", expand=1)
+    mask_and_crop_tif(tif_file, basin_info, output_mask, expand=expand_pixels)
