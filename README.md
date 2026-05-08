@@ -73,13 +73,6 @@ pip install geopandas rasterio numpy shapely
 - 流域内部像素值 = **1**
 - 流域外部像素值 = **0**
 
-如需改为 **内部 0、外部 1**，只需修改函数中的一行代码：
-
-```python
-mask_uint8 = np.where(mask_in, 0, 1).astype(np.uint8)   # 内0外1
-```
-
-或直接查找 `mask_uint8 = np.where(mask_in, 1, 0)` 并交换即可。
 
 ## 使用示例
 
