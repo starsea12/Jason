@@ -63,7 +63,7 @@ def main():
             [geom_proj], out_shape=(height, width),
             transform=out_transform, invert=False, all_touched=False
         )
-        mask_uint8 = np.where(mask_bool, 0, 255).astype(np.uint8)
+        mask_uint8 = np.where(mask_bool, 0, 1).astype(np.uint8)
 
         # 写入掩膜 TIF
         profile = src.profile
